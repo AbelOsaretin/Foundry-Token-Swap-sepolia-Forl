@@ -15,9 +15,9 @@ contract TokenSwap {
     address DAI = 0x3e622317f8C93f7328350cF0B56d9eD4C620C5d6;
     address LINK = 0x779877A7B0D9E8603169DdbD7836e478b4624789;
 
-    mapping(address => uint256) public LinkDeposit;
+    mapping(address => uint256) public LINKDeposit;
 
-    uint256 public DIADeposit;
+    mapping(address => uint256) public DIADeposit;
 
     int public pairResult;
 
@@ -42,19 +42,17 @@ contract TokenSwap {
         return answer;
     }
 
-    function AddLiquidity(
-        uint256 _amountDia /*, uint256 _amountLink*/
-    ) external {
+    function AddLiquidity(uint256 _amountDia, uint256 _amountLink) external {
         require(
             IERC20(DAI).transferFrom(msg.sender, address(this), _amountDia),
             "Deposit Faild for TokenA"
         );
-        // require(
-        //     IERC20(LINK).transferFrom(msg.sender, address(this), _amountLink),
-        //     "Deposit Failed for TokenB"
-        // );
-        // LinkDeposit[msg.sender] = _amountLink;
-        DIADeposit = DIADeposit + _amountDia;
+        require(
+            IERC20(LINK).transferFrom(msg.sender, address(this), _amountLink),
+            "Deposit Failed for TokenB"
+        );
+        LINKDeposit[LINK] = LINKDeposit[LINK] + _amountLink;
+        DIADeposit[DAI] = DIADeposit[DAI] + _amountDia;
     }
 
     // function ViewApproval() external view returns (uint256) {
@@ -77,53 +75,71 @@ contract TokenSwap {
     //     return true;
     // }
 
-    function swapTokenForETH(address _base, uint256 _amount) external {
-        int256 result = getDerivedPrice(_base, ETHUSDAddress, 8);
+    function swapTokenForETH(address _base, uint256 _amountIn) external {
+        // int256 tokenPrice = getDerivedPrice(_base, ETHUSDAddress, 8);
 
-        DIADeposit = DIADeposit - uint256(result);
-        uint256 amountOut = uint256(result) * _amount;
+        // uint256 amountOut = uint256(result) * _amount;
 
-        console2.log(result);
-        // payable(msg.sender).transfer(amountOut);
+        // uint256 amountOutDivid = amountOut / 100;
+        // console2.log("Raw result from Chainlink :", result);
+        // console2.log("Amount after calculation with swap amount", amountOut);
+        // console2.log("Current Dia Liquidity: ", DIADeposit);
+        // console2.log("Checking Amount After Calculation", amountOutDivid);
 
-        emit TokenSwapForETH(address(this), msg.sender, amountOut);
+        // DIADeposit = DIADeposit - amountOutDivid;
+
+        AggregatorV3Interface tokenPriceFeed = AggregatorV3Interface(_base);
+        (, int tokenPrice, , , ) = tokenPriceFeed.latestRoundData();
+
+        uint256 ethAmount = (_amountIn * uint(tokenPrice)) /
+            (10 ** tokenPriceFeed.decimals());
+
+        emit TokenSwapForETH(address(this), msg.sender, ethAmount);
+
+        DIADeposit[_base] = DIADeposit[_base] - ethAmount;
+
+        // payable(msg.sender).transfer(ethAmount);
     }
 
-    function getDerivedPrice(
-        address _base,
-        address _quote,
-        uint8 _decimals
-    ) public view returns (int256) {
-        require(
-            _decimals > uint8(0) && _decimals <= uint8(18),
-            "Invalid _decimals"
+    function swapTokenForToken(
+        address tokenIn,
+        address tokenOut,
+        uint amountIn,
+        uint amountOutMin
+    ) external {
+        AggregatorV3Interface tokenInPriceFeed = AggregatorV3Interface(tokenIn);
+        AggregatorV3Interface tokenOutPriceFeed = AggregatorV3Interface(
+            tokenOut
         );
-        int256 decimals = int256(10 ** uint256(_decimals));
-        (, int256 basePrice, , , ) = AggregatorV3Interface(_base)
-            .latestRoundData();
-        console2.log("Testing for Base Price", basePrice);
-        uint8 baseDecimals = AggregatorV3Interface(_base).decimals();
-        basePrice = scalePrice(basePrice, baseDecimals, _decimals);
+        // Get the latest price data for both tokens
+        (, int token1Price, , , ) = tokenInPriceFeed.latestRoundData();
+        (, int token2Price, , , ) = tokenOutPriceFeed.latestRoundData();
 
-        (, int256 quotePrice, , , ) = AggregatorV3Interface(_quote)
-            .latestRoundData();
-        uint8 quoteDecimals = AggregatorV3Interface(_quote).decimals();
-        quotePrice = scalePrice(quotePrice, quoteDecimals, _decimals);
+        // Calculate the exchange rate between the tokens
+        uint exchangeRate = (uint(token1Price) *
+            10 ** tokenOutPriceFeed.decimals()) / uint(token2Price);
 
-        return (basePrice * decimals) / quotePrice;
-    }
+        // Calculate the amount of tokenOut to send
+        uint amountOut = (amountIn * exchangeRate) /
+            (10 ** tokenInPriceFeed.decimals());
 
-    function scalePrice(
-        int256 _price,
-        uint8 _priceDecimals,
-        uint8 _decimals
-    ) internal pure returns (int256) {
-        if (_priceDecimals < _decimals) {
-            return _price * int256(10 ** uint256(_decimals - _priceDecimals));
-        } else if (_priceDecimals > _decimals) {
-            return _price / int256(10 ** uint256(_priceDecimals - _decimals));
-        }
-        return _price;
+        console2.log(
+            "Balance of token sdender",
+            IERC20(tokenIn).balanceOf(msg.sender)
+        );
+
+        // Transfer tokens from the caller to this contract
+        DIADeposit[tokenIn] = DIADeposit[tokenIn] + amountIn;
+        LINKDeposit[tokenOut] = LINKDeposit[tokenOut] - amountOut;
+
+        // Transfer tokensOut to the caller
+        require(
+            IERC20(tokenOut).transfer(msg.sender, amountOut),
+            "Transfer failed"
+        );
+
+        // Optional: Ensure minimum amount of tokenOut received
+        require(amountOut >= amountOutMin, "Insufficient output amount");
     }
 
     fallback() external payable {}
